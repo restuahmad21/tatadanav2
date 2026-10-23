@@ -1,3 +1,17 @@
 {
-  "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/server.js" }]
+  "version": 2,
+  "framework": null,
+  "buildCommand": null,
+  "outputDirectory": null,
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "public/**,data/**,src/**,supabase/**"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index.js"
+    }
+  ]
 }

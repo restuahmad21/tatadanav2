@@ -1378,9 +1378,28 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const server = http.createServer((req, res) => {
-  const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost:3000'}`);
+  const rawUrl = req.headers['x-forwarded-uri'] || req.url;
+  const reqUrl = new URL(rawUrl, `http://${req.headers.host || 'localhost:3000'}`);
   const pathname = reqUrl.pathname;
   const method = req.method;
+
+  // Support pre-parsed body in Vercel serverless functions
+  if (req.body !== undefined && req.body !== null && req.readableEnded) {
+    const bodyStr = typeof req.body === 'object' ? JSON.stringify(req.body) : String(req.body);
+    const bodyBuf = Buffer.from(bodyStr);
+    const origOn = req.on.bind(req);
+    req.on = function(event, handler) {
+      if (event === 'data') {
+        process.nextTick(() => handler(bodyBuf));
+        return this;
+      }
+      if (event === 'end') {
+        process.nextTick(() => handler());
+        return this;
+      }
+      return origOn(event, handler);
+    };
+  }
 
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -3627,43 +3646,47 @@ const server = http.createServer((req, res) => {
   res.end();
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`====================================================`);
-  console.log(`🚀 TataDana SaaS Full-Stack Server Running!`);
-  console.log(`🌐 Localhost URL : http://localhost:${PORT}`);
-  console.log(`📡 Bot Mode      : Telegram Long Polling (Localhost-Ready)`);
-  console.log(`📡 Webhook URL   : http://localhost:${PORT}/api/telegram/webhook`);
-  console.log(`🕒 Timezone      : Asia/Jakarta (WIB)`);
-  console.log(`🛡️ Database      : Supabase Postgres Schema Connected`);
-  console.log(`====================================================`);
+if (!process.env.VERCEL) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`====================================================`);
+    console.log(`🚀 TataDana SaaS Full-Stack Server Running!`);
+    console.log(`🌐 Localhost URL : http://localhost:${PORT}`);
+    console.log(`📡 Bot Mode      : Telegram Long Polling (Localhost-Ready)`);
+    console.log(`📡 Webhook URL   : http://localhost:${PORT}/api/telegram/webhook`);
+    console.log(`🕒 Timezone      : Asia/Jakarta (WIB)`);
+    console.log(`🛡️ Database      : Supabase Postgres Schema Connected`);
+    console.log(`====================================================`);
 
-  // Auto-start Long Polling daemon if bot token is available in db, settings, or .env
-  let autoToken = (db.user && db.user.custom_bot_token) || process.env.TELEGRAM_BOT_TOKEN;
-  if (!autoToken && telegramPolling && typeof telegramPolling.loadTelegramToken === 'function') {
-    const loaded = telegramPolling.loadTelegramToken();
-    if (loaded && loaded.token) {
-      autoToken = loaded.token;
+    // Auto-start Long Polling daemon if bot token is available in db, settings, or .env
+    let autoToken = (db.user && db.user.custom_bot_token) || process.env.TELEGRAM_BOT_TOKEN;
+    if (!autoToken && telegramPolling && typeof telegramPolling.loadTelegramToken === 'function') {
+      const loaded = telegramPolling.loadTelegramToken();
+      if (loaded && loaded.token) {
+        autoToken = loaded.token;
+      }
     }
-  }
 
-  if (telegramPolling && autoToken) {
-    if (db && db.user) {
-      db.user.custom_bot_token = autoToken;
-      db.user.custom_bot_connected = true;
-      db.user.telegram_connected = true;
+    if (telegramPolling && autoToken) {
+      if (db && db.user) {
+        db.user.custom_bot_token = autoToken;
+        db.user.custom_bot_connected = true;
+        db.user.telegram_connected = true;
+      }
+      process.env.TELEGRAM_BOT_TOKEN = autoToken;
+      telegramPolling.pollingManager.start({
+        botToken: autoToken,
+        db,
+        messageHandler: handleTelegramUpdate
+      }).then(() => {
+        console.log('🤖 Auto-started Telegram Long Polling daemon successfully from persistent storage.');
+      }).catch(err => {
+        console.warn('⚠️ Could not auto-start Telegram polling:', err.message);
+      });
     }
-    process.env.TELEGRAM_BOT_TOKEN = autoToken;
-    telegramPolling.pollingManager.start({
-      botToken: autoToken,
-      db,
-      messageHandler: handleTelegramUpdate
-    }).then(() => {
-      console.log('🤖 Auto-started Telegram Long Polling daemon successfully from persistent storage.');
-    }).catch(err => {
-      console.warn('⚠️ Could not auto-start Telegram polling:', err.message);
-    });
-  }
-});
+  });
+} else {
+  console.log('☁️ TataDana serverless instance initialized on Vercel.');
+}
 
 server.handleTelegramUpdate = handleTelegramUpdate;
 server.telegramPolling = telegramPolling;
